@@ -1,0 +1,4 @@
+com\example\helloworld\service\MessageService.class
+com\example\helloworld\HelloWorldApplication.class
+com\example\helloworld\config\ProfileConfig.class
+com\example\helloworld\HomeController.class
