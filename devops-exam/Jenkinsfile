@@ -1,0 +1,86 @@
+pipeline {
+    agent {
+        kubernetes {
+            label 'devops-interview'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: maven
+      image: maven:3.9.6-eclipse-temurin-17
+      command: ['cat']
+      tty: true
+    - name: docker
+      image: docker:24.0.5-dind
+      securityContext:
+        privileged: true
+      env:
+        - name: DOCKER_HOST
+          value: tcp://localhost:2375
+    - name: gcloud
+      image: google/cloud-sdk:slim
+      command: ['cat']
+      tty: true
+"""
+        }
+    }
+
+    environment {
+        PROJECT_ID   = "my-project"
+        REGION       = "us-central1"
+        REPO         = "my-repo"
+        SERVICE_NAME = "hello-world-service"
+        IMAGE_NAME   = "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/hello-world"
+        IMAGE_TAG    = "v${env.BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage('Unit Tests') {
+            steps {
+                container('maven') {
+                    sh 'mvn clean test'
+                }
+            }
+        }
+
+        stage('Build & Push Image') {
+            steps {
+                container('docker') {
+                    withCredentials([file(credentialsId: 'gcloud-sa', variable: 'GCLOUD_KEY')]) {
+                        sh '''
+                        gcloud auth activate-service-account --key-file=$GCLOUD_KEY
+                        gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+                        docker build -t $IMAGE_NAME:$IMAGE_TAG .
+                        docker push $IMAGE_NAME:$IMAGE_TAG
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Cloud Run') {
+            when { branch 'main' }
+            steps {
+                container('gcloud') {
+                    withCredentials([file(credentialsId: 'gcloud-sa', variable: 'GCLOUD_KEY')]) {
+                        sh '''
+                        gcloud auth activate-service-account --key-file=$GCLOUD_KEY
+                        gcloud config set project $PROJECT_ID
+
+                        gcloud run deploy $SERVICE_NAME \
+                          --image=$IMAGE_NAME:$IMAGE_TAG \
+                          --region=$REGION \
+                          --platform=managed \
+                          --allow-unauthenticated \
+                          --set-env-vars SPRING_PROFILES_ACTIVE=prod \
+                          --traffic 100
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}
